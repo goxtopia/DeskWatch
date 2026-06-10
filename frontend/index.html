@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeskWatch - 桌面行为监测与数据集收集系统</title>
+    <!-- Google Fonts: Outfit & Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- CSS Stylesheet -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark-theme">
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo-icon">
+                    <i class="ph-bold ph-eye"></i>
+                </div>
+                <div class="logo-text">
+                    <h1>DeskWatch</h1>
+                    <span>v1.0.0</span>
+                </div>
+            </div>
+            <nav class="sidebar-menu">
+                <button class="menu-item active" data-tab="dashboard-tab">
+                    <i class="ph-bold ph-chart-pie"></i>
+                    <span>监控大屏</span>
+                </button>
+                <button class="menu-item" data-tab="review-tab">
+                    <i class="ph-bold ph-check-square"></i>
+                    <span>人工审查</span>
+                    <span class="badge" id="review-badge" style="display: none;">0</span>
+                </button>
+                <button class="menu-item" data-tab="history-tab">
+                    <i class="ph-bold ph-images"></i>
+                    <span>历史相册</span>
+                </button>
+                <button class="menu-item" data-tab="training-tab">
+                    <i class="ph-bold ph-cpu"></i>
+                    <span>模型训练</span>
+                </button>
+                <button class="menu-item" data-tab="settings-tab">
+                    <i class="ph-bold ph-gear"></i>
+                    <span>系统配置</span>
+                </button>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="camera-indicator-card">
+                    <div class="indicator-header">
+                        <span class="status-dot disconnected" id="nav-status-dot"></span>
+                        <span class="status-text" id="nav-status-text">断开连接</span>
+                    </div>
+                    <p class="indicator-desc" id="nav-status-desc">等待获取相机状态...</p>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- HEADER -->
+            <header class="content-header">
+                <div class="header-title-area">
+                    <h2 id="page-title">监控大屏</h2>
+                    <p id="page-subtitle" class="text-secondary">实时监测桌面活动与分类统计</p>
+                </div>
+                <div class="header-actions">
+                    <button id="toggle-capture-btn" class="btn btn-primary btn-glow">
+                        <i class="ph-bold ph-play"></i>
+                        <span>开启监控</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- TAB 1: DASHBOARD -->
+            <section id="dashboard-tab" class="tab-content active">
+                <div class="dashboard-grid">
+                    <!-- Top stats cards row -->
+                    <div class="stats-row">
+                        <div class="glass-card stat-card">
+                            <div class="stat-icon-wrapper blue">
+                                <i class="ph-bold ph-clock"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">今日追踪时长</span>
+                                <h3 class="stat-value" id="stat-total-time">0m</h3>
+                            </div>
+                        </div>
+                        <div class="glass-card stat-card">
+                            <div class="stat-icon-wrapper green">
+                                <i class="ph-bold ph-images"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">今日采集图片</span>
+                                <h3 class="stat-value" id="stat-total-images">0</h3>
+                            </div>
+                        </div>
+                        <div class="glass-card stat-card">
+                            <div class="stat-icon-wrapper purple">
+                                <i class="ph-bold ph-shield-check"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">已人工核对</span>
+                                <h3 class="stat-value" id="stat-reviewed-count">0</h3>
+                            </div>
+                        </div>
+                        <div class="glass-card stat-card">
+                            <div class="stat-icon-wrapper orange">
+                                <i class="ph-bold ph-robot"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">当前运行模型</span>
+                                <h3 class="stat-value" id="stat-active-model">CLIP</h3>
+                            </div>
+                        </div>
+                        <div class="glass-card stat-card">
+                            <div class="stat-icon-wrapper red">
+                                <i class="ph-bold ph-hourglass-high"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">今日久坐超时</span>
+                                <h3 class="stat-value" id="stat-overtime-time">0m</h3>
+                            </div>
+                        </div>
+                        <div class="glass-card stat-card">
+                            <div class="stat-icon-wrapper blue">
+                                <i class="ph-bold ph-activity"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">今日有效休息</span>
+                                <h3 class="stat-value" id="stat-valid-breaks">0次</h3>
+                            </div>
+                        </div>
+                        <div class="glass-card stat-card">
+                            <div class="stat-icon-wrapper orange">
+                                <i class="ph-bold ph-timer"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">连续未活动时长</span>
+                                <h3 class="stat-value" id="stat-inactive-time">0m</h3>
+                            </div>
+                        </div>
+                        <div class="glass-card stat-card">
+                            <div class="stat-icon-wrapper blue">
+                                <i class="ph-bold ph-drop"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">今日饮水次数</span>
+                                <h3 class="stat-value" id="stat-drinking-count">0次</h3>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Main Dashboard Layout -->
+                    <div class="dashboard-main-layout">
+                        <!-- Left Panel: Live Preview & Distribution -->
+                        <div class="dashboard-column-left">
+                            <!-- Live Preview Card -->
+                            <div class="glass-card preview-card">
+                                <div class="card-header">
+                                    <h3>最新画面采集</h3>
+                                    <span class="timestamp-badge" id="preview-timestamp">--:--:--</span>
+                                </div>
+                                <div class="preview-container">
+                                    <div class="placeholder-preview" id="preview-placeholder">
+                                        <i class="ph ph-aperture"></i>
+                                        <p>无采集图像。请点击右上角“开启监控”按钮。</p>
+                                    </div>
+                                    <img src="" alt="Latest Capture" id="preview-image" style="display: none;">
+                                    <div class="preview-overlay" id="preview-overlay" style="display: none;">
+                                        <span id="preview-label">分类中...</span>
+                                        <span id="preview-confidence">--%</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Panel: Chart and Details -->
+                        <div class="dashboard-column-right">
+                            <!-- Chart Card -->
+                            <div class="glass-card chart-card">
+                                <div class="card-header">
+                                    <h3>今日行为时长分布</h3>
+                                </div>
+                                <div class="chart-container">
+                                    <canvas id="timeDistributionChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Hourly Activity Timeline -->
+                    <div class="glass-card timeline-card">
+                        <div class="card-header">
+                            <h3>今日活动时间线</h3>
+                            <span class="text-secondary font-sm">各时间段的记录分布</span>
+                        </div>
+                        <div class="timeline-bar-wrapper">
+                            <div class="timeline-bar" id="timeline-bar">
+                                <!-- Dynamic block items will be placed here -->
+                            </div>
+                            <div class="timeline-labels">
+                                <span>00:00</span>
+                                <span>04:00</span>
+                                <span>08:00</span>
+                                <span>12:00</span>
+                                <span>16:00</span>
+                                <span>20:00</span>
+                                <span>24:00</span>
+                            </div>
+                        </div>
+                        <div class="timeline-legend" id="timeline-legend">
+                            <!-- Dynamic legend categories -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 2: REVIEW PANEL -->
+            <section id="review-tab" class="tab-content">
+                <div class="review-layout">
+                    <!-- Left: Image Viewer -->
+                    <div class="glass-card review-image-card">
+                        <div class="card-header">
+                            <h3>待核对图像 (<span id="review-current-index">0</span>/<span id="review-total-count">0</span>)</h3>
+                            <div class="review-actions">
+                                <button class="btn btn-secondary btn-sm" id="btn-skip-image">
+                                    <i class="ph ph-skip-forward"></i> 跳过
+                                </button>
+                                <button class="btn btn-danger btn-sm" id="btn-delete-image">
+                                    <i class="ph ph-trash"></i> 删除图像
+                                </button>
+                            </div>
+                        </div>
+                        <div class="review-image-container">
+                            <div class="placeholder-preview" id="review-placeholder">
+                                <i class="ph ph-check-circle text-green" style="font-size: 4rem;"></i>
+                                <h3>全部核对完毕！</h3>
+                                <p>目前没有需要人工校对的图像。所有采集都已处理。</p>
+                            </div>
+                            <img src="" alt="Review" id="review-image" style="display: none;">
+                        </div>
+                    </div>
+
+                    <!-- Right: Classification Panel -->
+                    <div class="glass-card review-control-card">
+                        <div class="card-header">
+                            <h3>核对与标注</h3>
+                        </div>
+                        <div class="review-details" id="review-details-pane" style="display: none;">
+                            <div class="detail-item">
+                                <span class="detail-label">采样时间:</span>
+                                <span class="detail-val" id="review-time">2026-06-08 18:00:00</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">分类模型:</span>
+                                <span class="detail-val text-blue" id="review-model">CLIP</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">模型预测:</span>
+                                <div class="prediction-badge-wrapper">
+                                    <span class="prediction-badge" id="review-predicted">Using Computer</span>
+                                    <span class="confidence-badge" id="review-confidence-val">85%</span>
+                                </div>
+                            </div>
+
+                            <hr class="divider">
+
+                            <div class="correction-area">
+                                <h4>选择正确行为分类：</h4>
+                                <p class="help-text">点击下方按钮或在键盘上按对应的数字键 <kbd>1</kbd>-<kbd>9</kbd> 快速选择：</p>
+                                <div class="categories-grid" id="review-categories-buttons">
+                                    <!-- Dynamic buttons e.g. 1. Using Computer, 2. Looking at Phone -->
+                                </div>
+                            </div>
+                        </div>
+                        <div class="review-empty-side-pane" id="review-empty-pane">
+                            <p class="text-secondary">没有选中的图像进行核对。</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: HISTORY GALLERY -->
+            <section id="history-tab" class="tab-content">
+                <div class="history-layout">
+                    <!-- Filter Bar -->
+                    <div class="glass-card filter-bar-card">
+                        <div class="filter-bar">
+                            <div class="filter-group">
+                                <label for="filter-date">日期选择</label>
+                                <input type="date" id="filter-date">
+                            </div>
+                            <div class="filter-group">
+                                <label for="filter-reviewed">标注状态</label>
+                                <select id="filter-reviewed">
+                                    <option value="">全部记录</option>
+                                    <option value="0">未人工核对</option>
+                                    <option value="1">已人工更正</option>
+                                </select>
+                            </div>
+                            <button id="btn-reset-filters" class="btn btn-secondary btn-sm">
+                                <i class="ph ph-arrow-counter-clockwise"></i> 重置筛选
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Gallery Grid -->
+                    <div class="gallery-container">
+                        <div class="gallery-grid" id="history-gallery-grid">
+                            <!-- Dynamic photo cards go here -->
+                        </div>
+                        <div class="gallery-empty" id="history-gallery-empty" style="display: none;">
+                            <i class="ph ph-image-square" style="font-size: 3rem; margin-bottom: 1rem; color: var(--text-muted);"></i>
+                            <p>没有找到符合筛选条件的记录。</p>
+                        </div>
+                    </div>
+
+                    <!-- Pagination -->
+                    <div class="pagination-container glass-card">
+                        <div class="pagination-info">
+                            共 <span id="history-total-count">0</span> 条记录
+                        </div>
+                        <div class="pagination-controls">
+                            <button id="btn-history-prev" class="btn btn-secondary btn-sm" disabled>
+                                <i class="ph ph-caret-left"></i> 上一页
+                            </button>
+                            <span class="pagination-page">第 <span id="history-current-page">1</span> / <span id="history-total-pages">1</span> 页</span>
+                            <button id="btn-history-next" class="btn btn-secondary btn-sm" disabled>
+                                <i class="ph ph-caret-right"></i> 下一页
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 3: TRAINING PANEL -->
+            <section id="training-tab" class="tab-content">
+                <div class="training-layout">
+                    <!-- Left: Dataset and train control -->
+                    <div class="training-column-left">
+                        <div class="glass-card">
+                            <div class="card-header">
+                                <h3>训练数据集分布</h3>
+                                <span class="badge badge-purple" id="dataset-total-badge">共 0 张已标注图片</span>
+                            </div>
+                            <div class="dataset-stats-container">
+                                <p class="help-text">通过人工“审查”并更正后的图片会被移动到对应类别的训练集文件夹中。训练CNN模型需要至少 2 个类别，且每个类别下有已标注图片，总数不少于 5 张。</p>
+                                <div class="dataset-table-wrapper">
+                                    <table class="dataset-table">
+                                        <thead>
+                                            <tr>
+                                                <th>行为类别</th>
+                                                <th>图片数量</th>
+                                                <th>状态</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="dataset-stats-tbody">
+                                            <!-- Dynamic rows of categories & sample counts -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="glass-card mt-card">
+                            <div class="card-header">
+                                <h3>模型训练配置</h3>
+                            </div>
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="train-type">训练模型类别</label>
+                                    <select id="train-type">
+                                        <option value="cnn">ConvNeXt (CNN 微调)</option>
+                                        <option value="clip_mlp">CLIP + MLP 分类器 (极速训练)</option>
+                                        <option value="clip_linear">CLIP + Linear 单层分类器 (超轻量且防过拟合)</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="train-epochs">训练轮数 (Epochs)</label>
+                                    <input type="number" id="train-epochs" value="5" min="1" max="100">
+                                </div>
+                                <div class="form-group">
+                                    <label for="train-batch">批大小 (Batch Size)</label>
+                                    <input type="number" id="train-batch" value="8" min="2" max="64">
+                                </div>
+                                <div class="form-group">
+                                    <label for="train-lr">学习率 (Learning Rate)</label>
+                                    <input type="number" id="train-lr" value="0.0001" step="0.00001" min="0.000001" max="0.1">
+                                </div>
+                                <button id="btn-start-training" class="btn btn-primary btn-full mt-form">
+                                    <i class="ph-bold ph-play-circle"></i>
+                                    <span id="btn-train-text">开始模型微调</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Train process feedback -->
+                    <div class="training-column-right">
+                        <div class="glass-card status-card-training">
+                            <div class="card-header">
+                                <h3>训练状态面板</h3>
+                                <span class="status-badge" id="train-status-badge">空闲</span>
+                            </div>
+                            <div class="training-progress-pane">
+                                <div class="progress-bar-container">
+                                    <div class="progress-bar-fill" id="train-progress-fill" style="width: 0%;"></div>
+                                </div>
+                                <div class="progress-metrics">
+                                    <div class="metric-item">
+                                        <span class="metric-label">Epoch</span>
+                                        <span class="metric-value" id="train-metric-epoch">0 / 0</span>
+                                    </div>
+                                    <div class="metric-item">
+                                        <span class="metric-label">训练损失</span>
+                                        <span class="metric-value" id="train-metric-loss">0.0000</span>
+                                    </div>
+                                    <div class="metric-item">
+                                        <span class="metric-label">验证损失</span>
+                                        <span class="metric-value" id="train-metric-val-loss">0.0000</span>
+                                    </div>
+                                    <div class="metric-item">
+                                        <span class="metric-label">验证准确率</span>
+                                        <span class="metric-value" id="train-metric-acc">0.00%</span>
+                                    </div>
+                                </div>
+                                <div class="console-box" id="train-console">
+                                    <p class="console-line system">[系统] 等待训练启动...</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 4: SYSTEM SETTINGS -->
+            <section id="settings-tab" class="tab-content">
+                <div class="settings-container">
+                    <div class="glass-card">
+                        <div class="card-header">
+                            <h3>摄像头与采集配置</h3>
+                        </div>
+                        <div class="settings-form">
+                            <div class="form-group">
+                                <label for="setting-rtsp-url">摄像头源 (RTSP URL 或 本地摄像头索引，如 0)</label>
+                                <input type="text" id="setting-rtsp-url" placeholder="0 or rtsp://username:password@ip:port/h264">
+                                <span class="help-block">提示：如果是本地默认摄像头，输入 '0' 即可。</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="setting-interval">采样间隔 (秒)</label>
+                                <input type="number" id="setting-interval" min="2" max="3600" placeholder="10">
+                            </div>
+                            
+                            <hr class="divider">
+                            
+                            <div class="form-group">
+                                <label>分类模式选择</label>
+                                <div class="model-selection-grid">
+                                    <label class="model-radio-card">
+                                        <input type="radio" name="setting-active-model" value="clip" checked>
+                                        <div class="radio-content">
+                                            <i class="ph-bold ph-sparkle"></i>
+                                            <div class="radio-texts">
+                                                <span class="title">CLIP 零样本分类</span>
+                                                <span class="desc">使用 HuggingFace 预训练 CLIP 模型，无需训练即可分类</span>
+                                            </div>
+                                        </div>
+                                    </label>
+                                    <label class="model-radio-card">
+                                        <input type="radio" name="setting-active-model" value="vlm">
+                                        <div class="radio-content">
+                                            <i class="ph-bold ph-eye-slash"></i>
+                                            <div class="radio-texts">
+                                                <span class="title">VLM 多模态大模型</span>
+                                                <span class="desc">通过 OpenAI 兼容 API 发送图像进行自然语言理解分类</span>
+                                            </div>
+                                        </div>
+                                    </label>
+                                    <label class="model-radio-card" id="cnn-radio-card">
+                                        <input type="radio" name="setting-active-model" value="cnn">
+                                        <div class="radio-content">
+                                            <i class="ph-bold ph-cpu"></i>
+                                            <div class="radio-texts">
+                                                <span class="title">自定义 CNN 模型</span>
+                                                <span class="desc">使用您微调后的 ConvNeXt 模型进行轻量化本地分类 (需先进行训练)</span>
+                                            </div>
+                                        </div>
+                                    </label>
+                                    <label class="model-radio-card" id="clip-mlp-radio-card">
+                                        <input type="radio" name="setting-active-model" value="clip_mlp">
+                                        <div class="radio-content">
+                                            <i class="ph-bold ph-lightning"></i>
+                                            <div class="radio-texts">
+                                                <span class="title">CLIP + MLP 模型</span>
+                                                <span class="desc">结合 CLIP 特征和微调后的 MLP 头进行超轻量化快速本地分类</span>
+                                            </div>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <hr class="divider">
+
+                            <!-- CLIP SETTINGS SECTION -->
+                            <div class="settings-sub-section" id="clip-settings-pane">
+                                <h4>CLIP 参数配置</h4>
+                                <div class="form-group">
+                                    <label for="setting-clip-model">CLIP 模型权重 (HuggingFace ID)</label>
+                                    <input type="text" id="setting-clip-model" placeholder="openai/clip-vit-base-patch32">
+                                </div>
+                            </div>
+
+                            <!-- VLM SETTINGS SECTION -->
+                            <div class="settings-sub-section" id="vlm-settings-pane" style="display: none;">
+                                <h4>VLM (OpenAI 兼容 API) 参数配置</h4>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label for="setting-vlm-url">API 基础 URL</label>
+                                        <input type="text" id="setting-vlm-url" placeholder="https://api.openai.com/v1">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="setting-vlm-key">API 金钥 (API Key)</label>
+                                        <input type="password" id="setting-vlm-key" placeholder="sk-...">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="setting-vlm-model">模型名称 (VLM Model Name)</label>
+                                        <input type="text" id="setting-vlm-model" placeholder="gpt-4o-mini">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="setting-vlm-prompt">提示词模版 (需包含 {categories})</label>
+                                    <textarea id="setting-vlm-prompt" rows="3"></textarea>
+                                </div>
+                            </div>
+
+                            <hr class="divider">
+
+                            <!-- SEDENTARY REMINDER CONFIG SECTION -->
+                            <div class="settings-sub-section">
+                                <h4>久坐提醒配置</h4>
+                                <div class="form-grid">
+                                    <div class="form-group" style="grid-column: span 2;">
+                                        <label class="checkbox-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                            <input type="checkbox" id="setting-sedentary-enabled" style="width: 18px; height: 18px;">
+                                            <span style="font-weight: 600; font-size: 0.95rem;">开启久坐提醒功能</span>
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="setting-sedentary-threshold">久坐提醒时间阈值 (分钟)</label>
+                                        <input type="number" id="setting-sedentary-threshold" min="1" max="180" placeholder="3">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="setting-sedentary-min-break">有效休息判定检测次数 (次)</label>
+                                        <input type="number" id="setting-sedentary-min-break" min="1" max="100" placeholder="5">
+                                        <span class="help-block" style="font-size: 11px; margin-top: 4px; color: var(--text-muted);">连续检测到休息状态达到此次数才算作一次有效休息</span>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="setting-sedentary-snooze">未响应时重复提醒间隔 (分钟)</label>
+                                        <input type="number" id="setting-sedentary-snooze" min="1" max="60" placeholder="5">
+                                        <span class="help-block" style="font-size: 11px; margin-top: 4px; color: var(--text-muted);">若发出提醒后未响应（未检测到有效休息），每隔此时间再次发起 3 连弹提醒</span>
+                                    </div>
+                                </div>
+
+                                <div class="form-group mt-form" style="margin-top: 15px;">
+                                    <label>选择视为“休息/离开”的行为类别</label>
+                                    <div class="checkbox-grid" id="setting-break-categories-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 8px;">
+                                        <!-- Dynamic checkboxes will be rendered here -->
+                                    </div>
+                                </div>
+
+                                <div class="form-group mt-form" style="margin-top: 15px; display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
+                                    <div>
+                                        <span style="font-size: 13px; color: var(--text-secondary);">系统通知权限: </span>
+                                        <span id="notification-permission-status" class="badge" style="background-color: var(--warning-light); color: var(--warning); padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600;">检测中...</span>
+                                    </div>
+                                    <button type="button" id="btn-request-notification" class="btn btn-secondary btn-sm">
+                                        <i class="ph ph-bell"></i> 请求授权并测试通知
+                                    </button>
+                                </div>
+                            </div>
+
+                            <hr class="divider">
+
+                            <!-- TELEGRAM BOT CONFIG SECTION -->
+                            <div class="settings-sub-section">
+                                <h4>Telegram Bot 提醒配置</h4>
+                                <div class="form-grid">
+                                    <div class="form-group" style="grid-column: span 2;">
+                                        <label class="checkbox-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                            <input type="checkbox" id="setting-telegram-enabled" style="width: 18px; height: 18px;">
+                                            <span style="font-weight: 600; font-size: 0.95rem;">开启 Telegram Bot 推送提醒</span>
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="setting-telegram-token">Bot Access Token</label>
+                                        <input type="password" id="setting-telegram-token" placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="setting-telegram-chatid">User Chat ID</label>
+                                        <input type="text" id="setting-telegram-chatid" placeholder="987654321">
+                                        <span class="help-block" style="font-size: 11px; margin-top: 4px; color: var(--text-muted);">在 Telegram 中向您的 Bot 发送 <code>/start</code> 可获取您的 Chat ID</span>
+                                    </div>
+                                    <div class="form-group" style="margin-top: 25px;">
+                                        <label class="checkbox-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                            <input type="checkbox" id="setting-telegram-report-enabled" style="width: 18px; height: 18px;">
+                                            <span style="font-weight: 600; font-size: 0.95rem;">启用今日数据日报每日推送</span>
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="setting-telegram-report-time">日报推送时间 (24小时制 HH:MM)</label>
+                                        <input type="text" id="setting-telegram-report-time" placeholder="21:00">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <hr class="divider">
+
+                            <!-- DRINKING CONFIG SECTION -->
+                            <div class="settings-sub-section">
+                                <h4>饮水统计配置</h4>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label for="setting-drinking-merge-gap">相邻饮水事件合并间隔 (样本数)</label>
+                                        <input type="number" id="setting-drinking-merge-gap" min="0" max="100" placeholder="5">
+                                        <span class="help-block" style="font-size: 11px; margin-top: 4px; color: var(--text-muted);">两次饮水检测事件之间如果相隔的其它事件不超过此数量，则合并计为同一次饮水事件</span>
+                                    </div>
+                                </div>
+                                <div class="form-group mt-form" style="margin-top: 15px;">
+                                    <label>选择视为“饮水”的行为类别</label>
+                                    <div class="checkbox-grid" id="setting-drinking-categories-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 8px;">
+                                        <!-- Dynamic checkboxes will be rendered here -->
+                                    </div>
+                                </div>
+                            </div>
+
+                            <hr class="divider">
+
+                            <!-- CATEGORIES CONFIG SECTION -->
+                            <div class="settings-sub-section">
+                                <div class="categories-section-header">
+                                    <h4>行为分类管理</h4>
+                                    <div class="add-category-input">
+                                        <input type="text" id="new-category-input" placeholder="输入新分类名称...">
+                                        <button class="btn btn-secondary btn-sm" id="btn-add-category">
+                                            <i class="ph ph-plus"></i> 添加
+                                        </button>
+                                    </div>
+                                </div>
+                                <p class="help-text">设置所有摄像头采集时需要分类的行为。修改类别后，CLIP/VLM 将自动接入新类别进行推断；CNN模型则需要重新进行标记与微调训练。</p>
+                                <div class="tags-container" id="settings-categories-list">
+                                    <!-- Dynamic tag items with delete buttons -->
+                                </div>
+                            </div>
+
+                            <hr class="divider">
+
+                            <div class="settings-footer">
+                                <button id="btn-save-settings" class="btn btn-primary btn-glow">
+                                    <i class="ph ph-floppy-disk"></i> 保存并应用配置
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- History Detail Modal (二次回看弹窗) -->
+    <div class="modal-backdrop" id="history-modal" style="display: none;">
+        <div class="glass-card modal-content">
+            <div class="modal-header">
+                <h3>记录详情</h3>
+                <button class="btn-close-modal" id="btn-close-history-modal">
+                    <i class="ph-bold ph-x"></i>
+                </button>
+            </div>
+            <div class="modal-body-layout">
+                <div class="modal-image-container">
+                    <img src="" alt="Record Detail" id="modal-detail-image">
+                </div>
+                <div class="modal-info-panel">
+                    <div class="detail-item">
+                        <span class="detail-label">记录ID:</span>
+                        <span class="detail-val text-secondary" id="modal-detail-id">-</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">采样时间:</span>
+                        <span class="detail-val" id="modal-detail-time">-</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">推断模型:</span>
+                        <span class="detail-val text-blue" id="modal-detail-model">-</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">模型预测:</span>
+                        <div class="prediction-badge-wrapper">
+                            <span class="prediction-badge" id="modal-detail-predicted">-</span>
+                            <span class="confidence-badge" id="modal-detail-confidence">-</span>
+                        </div>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">核对状态:</span>
+                        <span class="status-badge" id="modal-detail-status">-</span>
+                    </div>
+
+                    <hr class="divider">
+
+                    <div class="correction-area">
+                        <h4>更正或校对分类:</h4>
+                        <div class="categories-grid" id="modal-categories-grid">
+                            <!-- Dynamic category buttons -->
+                        </div>
+                    </div>
+                    
+                    <div class="modal-actions-footer">
+                        <button class="btn btn-danger btn-full" id="btn-modal-delete">
+                            <i class="ph ph-trash"></i> 删除此记录
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div class="toast-container" id="toast-container"></div>
+    <script src="notifications.js"></script>
+    <script src="dashboard.js"></script>
+    <script src="review.js"></script>
+    <script src="history.js"></script>
+    <script src="training.js"></script>
+    <script src="settings.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

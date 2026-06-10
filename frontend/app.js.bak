@@ -1,0 +1,1501 @@
+// DeskWatch - Frontend JS App
+document.addEventListener("DOMContentLoaded", () => {
+    // Application State
+    let config = null;
+    let unreviewedRecords = [];
+    let reviewIndex = 0;
+    let trainingInterval = null;
+    let lastLogIndex = 0;
+    let cameraStatusInterval = null;
+    let chartInstance = null;
+    let lastDashboardCaptureTime = null;
+    let isCurrentlySedentaryAlert = false;
+    let lastReminderTime = 0;
+    
+    let historyCurrentPage = 1;
+    let historyTotalPages = 1;
+    const historyLimit = 12;
+    
+    // Theme colors map for categories
+    const categoryColors = [
+        'hsl(262, 80%, 65%)',  // Purple
+        'hsl(190, 85%, 50%)',  // Cyan
+        'hsl(145, 65%, 48%)',  // Green
+        'hsl(35, 90%, 52%)',   // Orange
+        'hsl(343, 80%, 60%)',  // Pink
+        'hsl(210, 85%, 55%)',  // Blue
+        'hsl(48, 95%, 52%)',   // Yellow
+        'hsl(10, 85%, 58%)'    // Red
+    ];
+    
+    // UI Elements
+    const tabs = document.querySelectorAll(".menu-item[data-tab]");
+    const tabContents = document.querySelectorAll(".tab-content");
+    const pageTitle = document.getElementById("page-title");
+    const pageSubtitle = document.getElementById("page-subtitle");
+    
+    const toggleCaptureBtn = document.getElementById("toggle-capture-btn");
+    
+    // Sidebar Status
+    const navStatusDot = document.getElementById("nav-status-dot");
+    const navStatusText = document.getElementById("nav-status-text");
+    const navStatusDesc = document.getElementById("nav-status-desc");
+    const reviewBadge = document.getElementById("review-badge");
+    
+    // Toast Notification helper
+    function showToast(message, type = "info") {
+        const container = document.getElementById("toast-container");
+        const toast = document.createElement("div");
+        toast.className = `toast toast-${type}`;
+        
+        let icon = "ph-info";
+        if (type === "success") icon = "ph-check-circle";
+        if (type === "error") icon = "ph-warning-circle";
+        
+        toast.innerHTML = `
+            <i class="ph-bold ${icon}"></i>
+            <span class="toast-message">${message}</span>
+        `;
+        
+        container.appendChild(toast);
+        
+        // Trigger reflow
+        toast.offsetHeight;
+        toast.classList.add("show");
+        
+        setTimeout(() => {
+            toast.classList.remove("show");
+            setTimeout(() => toast.remove(), 400);
+        }, 3000);
+    }
+    window.showToast = showToast;
+    
+    // TAB ROUTING
+    tabs.forEach(tab => {
+        tab.addEventListener("click", () => {
+            tabs.forEach(t => t.classList.remove("active"));
+            tabContents.forEach(c => c.classList.remove("active"));
+            
+            tab.classList.add("active");
+            const targetTab = tab.getAttribute("data-tab");
+            document.getElementById(targetTab).classList.add("active");
+            
+            // Update Headers
+            if (targetTab === "dashboard-tab") {
+                pageTitle.innerText = "监控大屏";
+                pageSubtitle.innerText = "实时监测桌面活动与分类统计";
+                loadDashboardData();
+            } else if (targetTab === "review-tab") {
+                pageTitle.innerText = "人工核对与审查";
+                pageSubtitle.innerText = "人工校正预测结果并将其归档至训练集";
+                loadReviewData();
+            } else if (targetTab === "history-tab") {
+                pageTitle.innerText = "历史相册";
+                pageSubtitle.innerText = "相册式回顾所有已采集的历史样本，可进行二次校对或删除";
+                loadHistoryData(1);
+            } else if (targetTab === "training-tab") {
+                pageTitle.innerText = "模型训练中心";
+                pageSubtitle.innerText = "使用标注的更正数据微调本地 ConvNeXt 分类模型";
+                loadTrainingData();
+            } else if (targetTab === "settings-tab") {
+                pageTitle.innerText = "系统配置";
+                pageSubtitle.innerText = "配置摄像头源、采样频率与分类器选项";
+                loadSettingsData();
+            }
+        });
+    });
+    
+    // DYNAMIC COLOR MAPPER
+    function getCategoryColor(categoryName, index) {
+        if (!config || !config.categories) return categoryColors[index % categoryColors.length];
+        const catIdx = config.categories.indexOf(categoryName);
+        if (catIdx !== -1) {
+            return categoryColors[catIdx % categoryColors.length];
+        }
+        return categoryColors[index % categoryColors.length];
+    }
+    
+    // ==========================================
+    // TAB 1: DASHBOARD LOGIC
+    // ==========================================
+    
+    async function loadDashboardData() {
+        if (!config) await fetchConfig();
+        
+        // Update stats summary count
+        try {
+            const res = await fetch("/api/stats/daily");
+            const data = await res.json();
+            
+            // Total tracked image count
+            const timeline = data.timeline || [];
+            const imageCount = timeline.length;
+            document.getElementById("stat-total-images").innerText = imageCount;
+            
+            // Total tracked time (approximate based on interval)
+            const interval = config ? config.sample_interval : 10;
+            const totalSeconds = imageCount * interval;
+            const minutes = Math.floor(totalSeconds / 60);
+            const hours = Math.floor(minutes / 60);
+            const remMin = minutes % 60;
+            
+            let timeStr = "";
+            if (hours > 0) {
+                timeStr = `${hours}h ${remMin}m`;
+            } else {
+                timeStr = `${remMin}m`;
+            }
+            document.getElementById("stat-total-time").innerText = timeStr;
+            
+            // Calculate and display sedentary stats (overtime & valid breaks)
+            const sedStats = calculateSedentaryStats(timeline);
+            document.getElementById("stat-overtime-time").innerText = `${sedStats.overtimeMinutes}m`;
+            document.getElementById("stat-valid-breaks").innerText = `${sedStats.validBreaks}次`;
+            
+            // Build Doughnut Chart
+            renderChart(data.summary);
+            
+            // Build Time Line Bar
+            renderTimelineBar(timeline);
+            
+        } catch (e) {
+            console.error("Error loading dashboard stats:", e);
+            showToast("拉取监测统计失败", "error");
+        }
+        
+        // Get reviewed count
+        try {
+            const res = await fetch("/api/stats/dataset");
+            const data = await res.json();
+            const reviewedCount = Object.values(data).reduce((a, b) => a + b, 0);
+            document.getElementById("stat-reviewed-count").innerText = reviewedCount;
+        } catch (e) {
+            console.error("Error loading dataset stats:", e);
+        }
+    }
+    
+    function calculateSedentaryStats(timeline) {
+        if (!timeline || timeline.length === 0) {
+            return { validBreaks: 0, overtimeMinutes: 0 };
+        }
+        
+        const interval = config ? config.sample_interval : 10;
+        const minBreakCount = config ? config.min_break_detections : 5;
+        const thresholdMinutes = config ? config.sedentary_threshold_minutes : 3;
+        const breakCats = config ? (config.break_categories || ["Away", "Standing", "Napping"]) : ["Away", "Standing", "Napping"];
+        const breakCatsLower = breakCats.map(c => c.toLowerCase());
+        
+        const isBreak = (label) => {
+            if (!label) return false;
+            return breakCatsLower.includes(label.toLowerCase());
+        };
+        
+        // Convert YYYY-MM-DD HH:MM:SS to seconds from midnight
+        function timeToSeconds(timeStr) {
+            try {
+                const parts = timeStr.split(" ");
+                if (parts.length < 2) return 0;
+                const timeParts = parts[1].split(":");
+                return parseInt(timeParts[0], 10) * 3600 + parseInt(timeParts[1], 10) * 60 + parseInt(timeParts[2], 10);
+            } catch (e) {
+                return 0;
+            }
+        }
+        
+        // 1. Group timeline into sessions based on sample gaps (> 5 * interval)
+        const maxGap = Math.max(300, 5 * interval);
+        const sessions = [];
+        let currentSession = [timeline[0]];
+        
+        for (let i = 1; i < timeline.length; i++) {
+            const prevSec = timeToSeconds(timeline[i-1].timestamp);
+            const currSec = timeToSeconds(timeline[i].timestamp);
+            if (currSec - prevSec > maxGap) {
+                sessions.push(currentSession);
+                currentSession = [];
+            }
+            currentSession.push(timeline[i]);
+        }
+        sessions.push(currentSession);
+        
+        let totalValidBreaks = 0;
+        let totalOvertimeSeconds = 0;
+        
+        // 2. Process each session
+        sessions.forEach(session => {
+            if (session.length === 0) return;
+            
+            // Find break segments in this session
+            const breakSegments = [];
+            let inBreak = false;
+            let startIdx = -1;
+            
+            for (let i = 0; i < session.length; i++) {
+                const isBrk = isBreak(session[i].label);
+                if (isBrk) {
+                    if (!inBreak) {
+                        inBreak = true;
+                        startIdx = i;
+                    }
+                } else {
+                    if (inBreak) {
+                        breakSegments.push({ start: startIdx, end: i - 1 });
+                        inBreak = false;
+                    }
+                }
+            }
+            if (inBreak) {
+                breakSegments.push({ start: startIdx, end: session.length - 1 });
+            }
+            
+            // Filter valid break segments (consecutive detections >= minBreakCount)
+            const validBreakSegments = [];
+            breakSegments.forEach(seg => {
+                const length = seg.end - seg.start + 1;
+                if (length >= minBreakCount) {
+                    validBreakSegments.push(seg);
+                    totalValidBreaks++;
+                }
+            });
+            
+            // 3. Calculate sitting segments (separated by valid breaks)
+            const sittingSegments = [];
+            let prevEnd = -1;
+            
+            validBreakSegments.forEach(vBreak => {
+                sittingSegments.push({ start: prevEnd + 1, end: vBreak.start - 1 });
+                prevEnd = vBreak.end;
+            });
+            sittingSegments.push({ start: prevEnd + 1, end: session.length - 1 });
+            
+            // For each sitting segment, calculate duration and see if it exceeds threshold
+            sittingSegments.forEach(seg => {
+                if (seg.start > seg.end) return;
+                
+                const startSec = timeToSeconds(session[seg.start].timestamp);
+                const endSec = timeToSeconds(session[seg.end].timestamp) + interval;
+                const durationSec = endSec - startSec;
+                
+                const thresholdSec = thresholdMinutes * 60;
+                if (durationSec > thresholdSec) {
+                    totalOvertimeSeconds += (durationSec - thresholdSec);
+                }
+            });
+        });
+        
+        return {
+            validBreaks: totalValidBreaks,
+            overtimeMinutes: Math.round(totalOvertimeSeconds / 60)
+        };
+    }
+    
+    function renderChart(summaryData) {
+        const ctx = document.getElementById('timeDistributionChart').getContext('2d');
+        
+        // Prepare Labels, values and colors
+        const labels = Object.keys(summaryData || {});
+        if (labels.length === 0) {
+            // Empty state for chart
+            labels.push("无数据");
+        }
+        
+        const interval = config ? config.sample_interval : 10;
+        const dataValues = labels.map(label => {
+            if (label === "无数据") return 1;
+            const count = summaryData[label];
+            // Render in minutes
+            return parseFloat(((count * interval) / 60).toFixed(1));
+        });
+        
+        const colors = labels.map((label, idx) => {
+            if (label === "无数据") return 'hsla(220, 20%, 90%, 0.05)';
+            return getCategoryColor(label, idx);
+        });
+        
+        if (chartInstance) {
+            chartInstance.destroy();
+        }
+        
+        chartInstance = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: dataValues,
+                    backgroundColor: colors,
+                    borderColor: 'rgba(0, 0, 0, 0.4)',
+                    borderWidth: 2,
+                    hoverOffset: 6
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            color: 'hsl(210, 12%, 72%)',
+                            font: {
+                                family: 'Outfit',
+                                size: 12
+                            },
+                            padding: 16
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                if (context.label === "无数据") return "今天尚无采集记录";
+                                return ` ${context.label}: ${context.raw} 分钟`;
+                            }
+                        }
+                    }
+                },
+                cutout: '65%'
+            }
+        });
+    }
+    
+    function renderTimelineBar(timeline) {
+        const barContainer = document.getElementById("timeline-bar");
+        const legendContainer = document.getElementById("timeline-legend");
+        barContainer.innerHTML = "";
+        legendContainer.innerHTML = "";
+        
+        if (timeline.length === 0) {
+            barContainer.innerHTML = `<div class="timeline-segment" style="width: 100%; background-color: hsla(220, 20%, 90%, 0.05); position: absolute; left: 0; top: 0; height: 100%;" data-tooltip="今天无监测记录"></div>`;
+            legendContainer.innerHTML = `<div class="legend-item"><span class="legend-dot" style="background-color: hsla(220, 20%, 90%, 0.2);"></span><span>无监测数据</span></div>`;
+            return;
+        }
+        
+        // Helper to convert "YYYY-MM-DD HH:MM:SS" to seconds since midnight
+        function timeToSeconds(timeStr) {
+            try {
+                const parts = timeStr.split(" ");
+                if (parts.length < 2) return 0;
+                const timeParts = parts[1].split(":");
+                if (timeParts.length < 3) return 0;
+                const h = parseInt(timeParts[0], 10);
+                const m = parseInt(timeParts[1], 10);
+                const s = parseInt(timeParts[2], 10);
+                return h * 3600 + m * 60 + s;
+            } catch (e) {
+                console.error("Error parsing time to seconds:", e);
+                return 0;
+            }
+        }
+        
+        // Merge contiguous duplicate categories, but limit merge if there's a big gap (e.g. > 3 * interval)
+        const segments = [];
+        const interval = config ? config.sample_interval : 10;
+        const maxGap = interval * 3;
+        
+        let currentSeg = {
+            label: timeline[0].label,
+            startTime: timeline[0].timestamp,
+            endTime: timeline[0].timestamp,
+            startSec: timeToSeconds(timeline[0].timestamp),
+            endSec: timeToSeconds(timeline[0].timestamp) + interval
+        };
+        
+        for (let i = 1; i < timeline.length; i++) {
+            const item = timeline[i];
+            const itemSec = timeToSeconds(item.timestamp);
+            const gap = itemSec - currentSeg.endSec;
+            
+            if (item.label === currentSeg.label && gap <= maxGap) {
+                // Same label and within allowed gap: extend segment
+                currentSeg.endTime = item.timestamp;
+                currentSeg.endSec = itemSec + interval;
+            } else {
+                // Save old segment
+                segments.push(currentSeg);
+                // Start new segment
+                currentSeg = {
+                    label: item.label,
+                    startTime: item.timestamp,
+                    endTime: item.timestamp,
+                    startSec: itemSec,
+                    endSec: itemSec + interval
+                };
+            }
+        }
+        segments.push(currentSeg);
+        
+        // Render timeline bar segments as absolutely positioned blocks in the 24h timeline
+        const totalSecondsInDay = 86400;
+        
+        segments.forEach((seg, idx) => {
+            const leftPct = (seg.startSec / totalSecondsInDay) * 100;
+            const widthPct = ((seg.endSec - seg.startSec) / totalSecondsInDay) * 100;
+            
+            const color = getCategoryColor(seg.label, idx);
+            const segmentDiv = document.createElement("div");
+            segmentDiv.className = "timeline-segment";
+            segmentDiv.style.position = "absolute";
+            segmentDiv.style.left = `${leftPct.toFixed(3)}%`;
+            segmentDiv.style.width = `${widthPct.toFixed(3)}%`;
+            segmentDiv.style.height = "100%";
+            segmentDiv.style.backgroundColor = color;
+            
+            // Format tooltip: "Using Computer: 14:02:10 ~ 14:15:30 (13m)"
+            const durationSec = seg.endSec - seg.startSec;
+            const durationMin = Math.round(durationSec / 60);
+            const durationStr = durationMin > 0 ? `${durationMin}分钟` : `${durationSec}秒`;
+            
+            const tooltipText = `${seg.label}: ${seg.startTime.substring(11)} ~ ${seg.endTime.substring(11)} (${durationStr})`;
+            segmentDiv.setAttribute("data-tooltip", tooltipText);
+            
+            barContainer.appendChild(segmentDiv);
+        });
+        
+        // Render timeline legend
+        const uniqueLabels = [...new Set(timeline.map(item => item.label))];
+        uniqueLabels.forEach((label, idx) => {
+            const color = getCategoryColor(label, idx);
+            const legendDiv = document.createElement("div");
+            legendDiv.className = "legend-item";
+            legendDiv.innerHTML = `
+                <span class="legend-dot" style="background-color: ${color}"></span>
+                <span>${label}</span>
+            `;
+            legendContainer.appendChild(legendDiv);
+        });
+    }
+    
+    // CAMERA AND CAPTURE ACTIONS
+    async function fetchCameraStatus() {
+        try {
+            const res = await fetch("/api/camera/status");
+            const data = await res.json();
+            
+            // Handle Sedentary Status and Dispatch Events
+            const isRunning = data.is_running;
+            if (isRunning && data.sedentary_status) {
+                const sed = data.sedentary_status;
+                if (sed.is_sedentary) {
+                    const now = Date.now();
+                    const snoozeMinutes = (config && config.sedentary_snooze_minutes) || 5;
+                    const snoozeMs = snoozeMinutes * 60 * 1000;
+                    if (!isCurrentlySedentaryAlert || (now - lastReminderTime > snoozeMs)) {
+                        isCurrentlySedentaryAlert = true;
+                        lastReminderTime = now;
+                        if (window.HealthEvents) {
+                            window.HealthEvents.emit('sedentary', { minutes: sed.sedentary_minutes });
+                        }
+                    }
+                } else {
+                    if (isCurrentlySedentaryAlert) {
+                        isCurrentlySedentaryAlert = false;
+                        lastReminderTime = 0;
+                        if (window.HealthEvents) {
+                            window.HealthEvents.emit('clear_sedentary');
+                        }
+                    }
+                }
+            } else {
+                if (isCurrentlySedentaryAlert) {
+                    isCurrentlySedentaryAlert = false;
+                    lastReminderTime = 0;
+                    if (window.HealthEvents) {
+                        window.HealthEvents.emit('clear_sedentary');
+                    }
+                }
+            }
+            
+            // Update UI status dot & text
+            
+            // Navigation badge & button state
+            if (isRunning) {
+                toggleCaptureBtn.className = "btn btn-danger btn-glow";
+                toggleCaptureBtn.innerHTML = `<i class="ph-bold ph-stop"></i><span>停止监控</span>`;
+                
+                navStatusDot.className = "status-dot active";
+                navStatusText.innerText = "监控中";
+            } else {
+                toggleCaptureBtn.className = "btn btn-primary btn-glow";
+                toggleCaptureBtn.innerHTML = `<i class="ph-bold ph-play"></i><span>开启监控</span>`;
+                
+                navStatusDot.className = "status-dot disconnected";
+                navStatusText.innerText = "已停止";
+            }
+            
+            // Status card description
+            if (data.status === "Active") {
+                navStatusDesc.innerText = `采集状态正常。最新时间: ${data.last_capture_time.substring(11)}`;
+                
+                // If there's a new capture, refresh stats and timeline in real-time!
+                if (data.last_capture_time && data.last_capture_time !== lastDashboardCaptureTime) {
+                    lastDashboardCaptureTime = data.last_capture_time;
+                    const activeTab = document.querySelector(".menu-item.active").getAttribute("data-tab");
+                    if (activeTab === "dashboard-tab") {
+                        loadDashboardData();
+                    }
+                }
+                
+                // If on dashboard, update live preview
+                if (data.last_prediction) {
+                    document.getElementById("preview-placeholder").style.display = "none";
+                    
+                    const imgEl = document.getElementById("preview-image");
+                    imgEl.src = `/${data.last_prediction.image_path}?t=${new Date().getTime()}`;
+                    imgEl.style.display = "block";
+                    
+                    const overlayEl = document.getElementById("preview-overlay");
+                    overlayEl.style.display = "flex";
+                    
+                    document.getElementById("preview-label").innerText = data.last_prediction.label;
+                    document.getElementById("preview-confidence").innerText = `${Math.round(data.last_prediction.confidence * 100)}%`;
+                    document.getElementById("preview-timestamp").innerText = data.last_capture_time.substring(11);
+                }
+            } else if (data.status === "Capturing...") {
+                navStatusDot.className = "status-dot loading";
+                navStatusText.innerText = "画面抓取";
+                navStatusDesc.innerText = "摄像头正在截取帧...";
+            } else if (data.status === "Classifying...") {
+                navStatusDot.className = "status-dot loading";
+                navStatusText.innerText = "推理分析";
+                navStatusDesc.innerText = "模型正在分类画面行为...";
+            } else if (data.status === "Error") {
+                navStatusDot.className = "status-dot disconnected";
+                navStatusText.innerText = "监测错误";
+                navStatusDesc.innerText = data.last_error || "采集失败";
+            } else {
+                navStatusDesc.innerText = "等待开启监控。";
+            }
+            
+        } catch (e) {
+            console.error("Error getting camera status:", e);
+        }
+    }
+    
+    toggleCaptureBtn.addEventListener("click", async () => {
+        try {
+            const res = await fetch("/api/camera/status");
+            const data = await res.json();
+            const endpoint = data.is_running ? "/api/camera/stop" : "/api/camera/start";
+            
+            const toggleRes = await fetch(endpoint, { method: "POST" });
+            const result = await toggleRes.json();
+            
+            showToast(result.message, result.status === "success" ? "success" : "error");
+            fetchCameraStatus();
+            
+            // Reload dashboard if starting
+            if (endpoint === "/api/camera/start") {
+                setTimeout(loadDashboardData, 1000);
+            }
+        } catch (e) {
+            showToast("控制摄像头失败", "error");
+        }
+    });
+    
+    // ==========================================
+    // TAB 2: REVIEW PANEL LOGIC
+    // ==========================================
+    
+    async function loadReviewData() {
+        if (!config) await fetchConfig();
+        
+        try {
+            const res = await fetch("/api/records/unreviewed");
+            unreviewedRecords = await res.json();
+            reviewIndex = 0;
+            
+            // Update review badges globally
+            updateReviewBadgeCount(unreviewedRecords.length);
+            
+            renderReviewImage();
+        } catch (e) {
+            console.error("Error loading unreviewed records:", e);
+            showToast("获取审查列表失败", "error");
+        }
+    }
+    
+    function updateReviewBadgeCount(count) {
+        if (count > 0) {
+            reviewBadge.innerText = count;
+            reviewBadge.style.display = "inline-block";
+        } else {
+            reviewBadge.style.display = "none";
+        }
+    }
+    
+    function renderReviewImage() {
+        const placeholder = document.getElementById("review-placeholder");
+        const image = document.getElementById("review-image");
+        const detailPane = document.getElementById("review-details-pane");
+        const emptyPane = document.getElementById("review-empty-pane");
+        
+        document.getElementById("review-total-count").innerText = unreviewedRecords.length;
+        
+        if (unreviewedRecords.length === 0 || reviewIndex >= unreviewedRecords.length) {
+            placeholder.style.display = "flex";
+            image.style.display = "none";
+            detailPane.style.display = "none";
+            emptyPane.style.display = "flex";
+            document.getElementById("review-current-index").innerText = "0";
+            return;
+        }
+        
+        placeholder.style.display = "none";
+        image.style.display = "block";
+        detailPane.style.display = "flex";
+        emptyPane.style.display = "none";
+        
+        const record = unreviewedRecords[reviewIndex];
+        document.getElementById("review-current-index").innerText = reviewIndex + 1;
+        image.src = `/${record.image_path}?t=${new Date().getTime()}`;
+        
+        document.getElementById("review-time").innerText = record.timestamp;
+        document.getElementById("review-model").innerText = record.model_type.toUpperCase();
+        document.getElementById("review-predicted").innerText = record.predicted_label;
+        document.getElementById("review-confidence-val").innerText = record.confidence ? `${Math.round(record.confidence * 100)}%` : "N/A";
+        
+        // Render action buttons
+        renderReviewCategoriesButtons(record.predicted_label);
+    }
+    
+    function renderReviewCategoriesButtons(predictedLabel) {
+        const container = document.getElementById("review-categories-buttons");
+        container.innerHTML = "";
+        
+        if (!config || !config.categories) return;
+        
+        config.categories.forEach((cat, idx) => {
+            const btn = document.createElement("button");
+            btn.className = "btn-category-select";
+            
+            // Highlight if predicted
+            if (cat === predictedLabel) {
+                btn.style.borderColor = "var(--primary)";
+                btn.style.backgroundColor = "var(--primary-light)";
+            }
+            
+            const numberBadge = idx < 9 ? `<span class="category-number-badge">${idx + 1}</span>` : "";
+            
+            btn.innerHTML = `
+                <span>${cat}</span>
+                ${numberBadge}
+            `;
+            
+            btn.addEventListener("click", () => reviewChoice(cat));
+            container.appendChild(btn);
+        });
+    }
+    
+    async function reviewChoice(label) {
+        if (unreviewedRecords.length === 0 || reviewIndex >= unreviewedRecords.length) return;
+        
+        const record = unreviewedRecords[reviewIndex];
+        try {
+            const res = await fetch(`/api/records/${record.id}/review`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ corrected_label: label })
+            });
+            const data = await res.json();
+            
+            if (data.status === "success") {
+                showToast(`已成功归档至类 [${label}]`, "success");
+                
+                // Remove from local array
+                unreviewedRecords.splice(reviewIndex, 1);
+                
+                // Adjust index if we deleted the last item
+                if (reviewIndex >= unreviewedRecords.length && reviewIndex > 0) {
+                    reviewIndex = unreviewedRecords.length - 1;
+                }
+                
+                updateReviewBadgeCount(unreviewedRecords.length);
+                renderReviewImage();
+            } else {
+                showToast("归档失败", "error");
+            }
+        } catch (e) {
+            showToast("接口请求失败", "error");
+        }
+    }
+    
+    // SKIP
+    document.getElementById("btn-skip-image").addEventListener("click", () => {
+        if (unreviewedRecords.length <= 1) return;
+        reviewIndex = (reviewIndex + 1) % unreviewedRecords.length;
+        renderReviewImage();
+    });
+    
+    // DELETE
+    document.getElementById("btn-delete-image").addEventListener("click", async () => {
+        if (unreviewedRecords.length === 0 || reviewIndex >= unreviewedRecords.length) return;
+        
+        const record = unreviewedRecords[reviewIndex];
+        if (confirm("确定要永久删除此图片和记录吗？")) {
+            try {
+                const res = await fetch(`/api/records/${record.id}`, { method: "DELETE" });
+                const result = await res.json();
+                
+                if (result.status === "success") {
+                    showToast("记录已删除", "success");
+                    unreviewedRecords.splice(reviewIndex, 1);
+                    if (reviewIndex >= unreviewedRecords.length && reviewIndex > 0) {
+                        reviewIndex = unreviewedRecords.length - 1;
+                    }
+                    updateReviewBadgeCount(unreviewedRecords.length);
+                    renderReviewImage();
+                } else {
+                    showToast("删除失败", "error");
+                }
+            } catch (e) {
+                showToast("接口请求失败", "error");
+            }
+        }
+    });
+    
+    // KEYBOARD HOTKEYS FOR QUICK REVIEW
+    window.addEventListener("keydown", (e) => {
+        // Only trigger if review tab is active
+        const reviewTab = document.getElementById("review-tab");
+        if (!reviewTab.classList.contains("active")) return;
+        
+        // Ensure user is not typing in a text field
+        if (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA") {
+            return;
+        }
+        
+        const key = e.key;
+        if (key >= "1" && key <= "9") {
+            const idx = parseInt(key) - 1;
+            const buttons = document.querySelectorAll("#review-categories-buttons .btn-category-select");
+            if (buttons && buttons[idx]) {
+                buttons[idx].click();
+            }
+        }
+    });
+    
+    // ==========================================
+    // TAB 3: TRAINING PANEL LOGIC
+    // ==========================================
+    
+    async function loadTrainingData() {
+        if (!config) await fetchConfig();
+        
+        // Fetch dataset distribution stats
+        try {
+            const res = await fetch("/api/stats/dataset");
+            const datasetStats = await res.json();
+            
+            const tbody = document.getElementById("dataset-stats-tbody");
+            tbody.innerHTML = "";
+            
+            let totalImages = 0;
+            
+            if (config && config.categories) {
+                config.categories.forEach(cat => {
+                    const count = datasetStats[cat] || 0;
+                    totalImages += count;
+                    
+                    const row = document.createElement("tr");
+                    
+                    let statusBadge = `<span class="badge" style="background-color: hsla(220, 20%, 90%, 0.05); color: var(--text-muted);">暂无样本</span>`;
+                    if (count > 0 && count < 3) {
+                        statusBadge = `<span class="badge" style="background-color: var(--warning-light); color: var(--warning);">样本较少</span>`;
+                    } else if (count >= 3) {
+                        statusBadge = `<span class="badge" style="background-color: var(--success-light); color: var(--success);">就绪</span>`;
+                    }
+                    
+                    row.innerHTML = `
+                        <td><strong>${cat}</strong></td>
+                        <td>${count} 张</td>
+                        <td>${statusBadge}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            }
+            
+            document.getElementById("dataset-total-badge").innerText = `共 ${totalImages} 张已标注图片`;
+        } catch (e) {
+            console.error("Error loading dataset stats:", e);
+            showToast("拉取数据集信息失败", "error");
+        }
+        
+        // Refresh training status check
+        checkTrainingStatus();
+    }
+    
+    async function checkTrainingStatus() {
+        try {
+            const res = await fetch("/api/train/status");
+            const data = await res.json();
+            
+            updateTrainingUI(data);
+            
+            if (data.is_training) {
+                // If training, start polling
+                if (!trainingInterval) {
+                    trainingInterval = setInterval(checkTrainingStatus, 1000);
+                }
+            } else {
+                if (trainingInterval) {
+                    clearInterval(trainingInterval);
+                    trainingInterval = null;
+                }
+            }
+        } catch (e) {
+            console.error("Error checking training status:", e);
+        }
+    }
+    
+    function updateTrainingUI(status) {
+        const badge = document.getElementById("train-status-badge");
+        const progressFill = document.getElementById("train-progress-fill");
+        const consoleBox = document.getElementById("train-console");
+        const startBtn = document.getElementById("btn-start-training");
+        
+        // Epoch progress percent
+        let pct = 0;
+        if (status.total_epochs > 0) {
+            pct = (status.current_epoch / status.total_epochs) * 100;
+        }
+        
+        progressFill.style.width = `${pct}%`;
+        
+        document.getElementById("train-metric-epoch").innerText = `${status.current_epoch} / ${status.total_epochs}`;
+        document.getElementById("train-metric-loss").innerText = status.train_loss ? status.train_loss.toFixed(4) : "0.0000";
+        document.getElementById("train-metric-val-loss").innerText = status.val_loss ? status.val_loss.toFixed(4) : "0.0000";
+        document.getElementById("train-metric-acc").innerText = status.val_accuracy ? `${(status.val_accuracy * 100).toFixed(2)}%` : "0.00%";
+        
+        const trainTypeSelect = document.getElementById("train-type");
+        const trainType = trainTypeSelect ? trainTypeSelect.value : "cnn";
+        let modelLabel = "ConvNeXt";
+        if (trainType === "clip_mlp") modelLabel = "CLIP-MLP";
+        else if (trainType === "clip_linear") modelLabel = "CLIP-Linear";
+        
+        if (status.is_training) {
+            badge.innerText = "训练中";
+            badge.className = "status-badge active";
+            startBtn.disabled = true;
+            startBtn.innerHTML = `<i class="ph-bold ph-spinner" style="animation: rotate 1.5s linear infinite;"></i> <span>正在训练 ${modelLabel}...</span>`;
+        } else {
+            badge.innerText = "空闲";
+            badge.className = "status-badge";
+            startBtn.disabled = false;
+            startBtn.innerHTML = `<i class="ph-bold ph-play-circle"></i> <span>开始微调 ${modelLabel} 模型</span>`;
+        }
+        
+        // Check log output & add to console using the logs array
+        if (status.logs && status.logs.length > lastLogIndex) {
+            for (let i = lastLogIndex; i < status.logs.length; i++) {
+                const logMsg = status.logs[i];
+                let lineClass = "system";
+                if (logMsg.includes("successfully") || logMsg.includes("completed")) {
+                    lineClass = "success";
+                }
+                
+                const timestamp = new Date().toLocaleTimeString();
+                let displayMsg = logMsg;
+                // Avoid prepending timestamp to border lines or metrics table rows
+                const isTableLine = logMsg.startsWith("=") || logMsg.startsWith("各类别评估指标") || logMsg.startsWith("类别:");
+                if (!isTableLine) {
+                    displayMsg = `[${timestamp}] ${logMsg}`;
+                }
+                
+                const line = document.createElement("p");
+                line.className = `console-line ${lineClass}`;
+                line.innerText = displayMsg;
+                consoleBox.appendChild(line);
+            }
+            lastLogIndex = status.logs.length;
+            consoleBox.scrollTop = consoleBox.scrollHeight;
+        }
+        
+        if (status.error) {
+            const lastLine = consoleBox.lastElementChild;
+            const timestamp = new Date().toLocaleTimeString();
+            const errText = `[${timestamp}] 训练发生错误: ${status.error}`;
+            if (!lastLine || !lastLine.innerText.includes(status.error)) {
+                const line = document.createElement("p");
+                line.className = "console-line error";
+                line.innerText = errText;
+                consoleBox.appendChild(line);
+                consoleBox.scrollTop = consoleBox.scrollHeight;
+            }
+            showToast(`训练失败: ${status.error}`, "error");
+        }
+    }
+    
+    // Bind training type change to dynamically update button text
+    const trainTypeSelect = document.getElementById("train-type");
+    if (trainTypeSelect) {
+        trainTypeSelect.addEventListener("change", () => {
+            const startBtn = document.getElementById("btn-start-training");
+            let label = "ConvNeXt";
+            if (trainTypeSelect.value === "clip_mlp") label = "CLIP-MLP";
+            else if (trainTypeSelect.value === "clip_linear") label = "CLIP-Linear";
+            startBtn.innerHTML = `<i class="ph-bold ph-play-circle"></i> <span>开始微调 ${label} 模型</span>`;
+        });
+    }
+
+    // START TRAINING ACTION
+    document.getElementById("btn-start-training").addEventListener("click", async () => {
+        const epochs = parseInt(document.getElementById("train-epochs").value);
+        const batchSize = parseInt(document.getElementById("train-batch").value);
+        const lr = parseFloat(document.getElementById("train-lr").value);
+        const trainType = document.getElementById("train-type").value;
+        
+        const consoleBox = document.getElementById("train-console");
+        lastLogIndex = 0;
+        consoleBox.innerHTML = `<p class="console-line system">[系统] 正在向服务器请求启动微调...</p>`;
+        
+        try {
+            const res = await fetch("/api/train", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ epochs, batch_size: batchSize, lr, train_type: trainType })
+            });
+            const data = await res.json();
+            
+            if (res.ok) {
+                showToast("训练已启动", "success");
+                checkTrainingStatus();
+            } else {
+                showToast(data.detail || "启动训练失败", "error");
+                consoleBox.innerHTML += `<p class="console-line error">[错误] 启动失败: ${data.detail || "未知错误"}</p>`;
+            }
+        } catch (e) {
+            showToast("网络请求失败", "error");
+        }
+    });
+    
+    // ==========================================
+    // TAB 4: SYSTEM SETTINGS LOGIC
+    // ==========================================
+    
+    async function loadSettingsData() {
+        await fetchConfig();
+        
+        if (!config) return;
+        
+        document.getElementById("setting-rtsp-url").value = config.rtsp_url;
+        document.getElementById("setting-interval").value = config.sample_interval;
+        
+        // Active model radio selection
+        const radios = document.getElementsByName("setting-active-model");
+        radios.forEach(radio => {
+            if (radio.value === config.active_model) {
+                radio.checked = true;
+            }
+            // Add change listener to show/hide sub-sections
+            radio.addEventListener("change", toggleSettingsSubsections);
+        });
+        
+        document.getElementById("setting-clip-model").value = config.clip_model_name;
+        document.getElementById("setting-vlm-url").value = config.vlm_api_url;
+        document.getElementById("setting-vlm-key").value = config.vlm_api_key;
+        document.getElementById("setting-vlm-model").value = config.vlm_model;
+        document.getElementById("setting-vlm-prompt").value = config.vlm_prompt;
+        
+        document.getElementById("setting-sedentary-enabled").checked = config.sedentary_reminder_enabled !== false;
+        document.getElementById("setting-sedentary-threshold").value = config.sedentary_threshold_minutes || 3;
+        document.getElementById("setting-sedentary-min-break").value = config.min_break_detections || 5;
+        document.getElementById("setting-sedentary-snooze").value = config.sedentary_snooze_minutes || 5;
+        
+        toggleSettingsSubsections();
+        renderSettingsCategories();
+    }
+    
+    function toggleSettingsSubsections() {
+        const activeModel = document.querySelector('input[name="setting-active-model"]:checked').value;
+        const clipPane = document.getElementById("clip-settings-pane");
+        const vlmPane = document.getElementById("vlm-settings-pane");
+        
+        clipPane.style.display = activeModel === "clip" ? "block" : "none";
+        vlmPane.style.display = activeModel === "vlm" ? "block" : "none";
+    }
+    
+    function renderSettingsCategories() {
+        const container = document.getElementById("settings-categories-list");
+        container.innerHTML = "";
+        
+        if (!config || !config.categories) return;
+        
+        config.categories.forEach(cat => {
+            const tag = document.createElement("div");
+            tag.className = "tag-item";
+            tag.innerHTML = `
+                <span>${cat}</span>
+                <button type="button" class="btn-delete-tag"><i class="ph ph-x"></i></button>
+            `;
+            
+            tag.querySelector(".btn-delete-tag").addEventListener("click", () => {
+                if (config.categories.length <= 2) {
+                    showToast("至少需保留 2 个类别进行监测", "warning");
+                    return;
+                }
+                config.categories = config.categories.filter(c => c !== cat);
+                renderSettingsCategories();
+            });
+            
+            container.appendChild(tag);
+        });
+        
+        renderSettingsBreakCategories();
+    }
+
+    function renderSettingsBreakCategories() {
+        const container = document.getElementById("setting-break-categories-list");
+        if (!container) return;
+        container.innerHTML = "";
+        
+        if (!config || !config.categories) return;
+        
+        const breakCats = config.break_categories || ["Away", "Standing", "Napping"];
+        const breakCatsLower = breakCats.map(c => c.toLowerCase());
+        
+        config.categories.forEach(cat => {
+            const wrapper = document.createElement("label");
+            wrapper.style.display = "flex";
+            wrapper.style.alignItems = "center";
+            wrapper.style.gap = "8px";
+            wrapper.style.cursor = "pointer";
+            wrapper.style.fontSize = "0.85rem";
+            
+            const isChecked = breakCatsLower.includes(cat.toLowerCase());
+            
+            wrapper.innerHTML = `
+                <input type="checkbox" value="${cat}" ${isChecked ? "checked" : ""} style="width: 16px; height: 16px;">
+                <span>${cat}</span>
+            `;
+            container.appendChild(wrapper);
+        });
+    }
+    
+    // ADD CATEGORY
+    document.getElementById("btn-add-category").addEventListener("click", () => {
+        const input = document.getElementById("new-category-input");
+        const value = input.value.trim();
+        
+        if (!value) return;
+        
+        if (!config) config = { categories: [] };
+        if (config.categories.includes(value)) {
+            showToast("该类别已存在", "warning");
+            return;
+        }
+        
+        config.categories.push(value);
+        input.value = "";
+        renderSettingsCategories();
+    });
+    
+    // SAVE CONFIG
+    document.getElementById("btn-save-settings").addEventListener("click", async () => {
+        const rtsp_url = document.getElementById("setting-rtsp-url").value.trim();
+        const sample_interval = parseInt(document.getElementById("setting-interval").value);
+        const active_model = document.querySelector('input[name="setting-active-model"]:checked').value;
+        
+        const clip_model_name = document.getElementById("setting-clip-model").value.trim();
+        const vlm_api_url = document.getElementById("setting-vlm-url").value.trim();
+        const vlm_api_key = document.getElementById("setting-vlm-key").value.trim();
+        const vlm_model = document.getElementById("setting-vlm-model").value.trim();
+        const vlm_prompt = document.getElementById("setting-vlm-prompt").value;
+        
+        if (!rtsp_url) {
+            showToast("摄像头源不能为空", "error");
+            return;
+        }
+        if (isNaN(sample_interval) || sample_interval < 2) {
+            showToast("采样频率必须大于等于 2 秒", "error");
+            return;
+        }
+        
+        const sedentary_reminder_enabled = document.getElementById("setting-sedentary-enabled").checked;
+        const sedentary_threshold_minutes = parseInt(document.getElementById("setting-sedentary-threshold").value);
+        const min_break_detections = parseInt(document.getElementById("setting-sedentary-min-break").value);
+        const sedentary_snooze_minutes = parseInt(document.getElementById("setting-sedentary-snooze").value);
+        
+        const break_categories = [];
+        document.querySelectorAll("#setting-break-categories-list input:checked").forEach(cb => {
+            break_categories.push(cb.value);
+        });
+        
+        if (isNaN(sedentary_threshold_minutes) || sedentary_threshold_minutes < 1) {
+            showToast("久坐提醒时间阈值必须大于等于 1 分钟", "error");
+            return;
+        }
+        if (isNaN(min_break_detections) || min_break_detections < 1) {
+            showToast("有效休息判定检测次数必须大于等于 1 次", "error");
+            return;
+        }
+        if (isNaN(sedentary_snooze_minutes) || sedentary_snooze_minutes < 1) {
+            showToast("重复提醒间隔时间必须大于等于 1 分钟", "error");
+            return;
+        }
+        
+        const updatedConfig = {
+            rtsp_url,
+            sample_interval,
+            categories: config.categories,
+            active_model,
+            vlm_api_url,
+            vlm_api_key,
+            vlm_model,
+            vlm_prompt,
+            clip_model_name,
+            sedentary_reminder_enabled,
+            sedentary_threshold_minutes,
+            min_break_detections,
+            break_categories,
+            sedentary_snooze_minutes
+        };
+        
+        try {
+            const res = await fetch("/api/config", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(updatedConfig)
+            });
+            const data = await res.json();
+            
+            if (res.ok) {
+                showToast("配置保存并应用成功", "success");
+                config = data.config;
+                
+                // Update global UI representation
+                document.getElementById("stat-active-model").innerText = config.active_model.toUpperCase();
+                
+                // Refresh status
+                fetchCameraStatus();
+            } else {
+                showToast(data.detail || "保存失败", "error");
+            }
+        } catch (e) {
+            showToast("接口请求错误", "error");
+        }
+    });
+    
+    // FETCH CONFIG HELPER
+    async function fetchConfig() {
+        try {
+            const res = await fetch("/api/config");
+            config = await res.json();
+            
+            // Set current running model in stats
+            document.getElementById("stat-active-model").innerText = config.active_model.toUpperCase();
+        } catch (e) {
+            console.error("Error fetching config:", e);
+        }
+    }
+    
+    // INITIALIZATION
+    async function init() {
+        await fetchConfig();
+        loadDashboardData();
+        fetchCameraStatus();
+        
+        // Polling loop for camera status
+        cameraStatusInterval = setInterval(fetchCameraStatus, 3000);
+        
+        // Initial review badge check
+        try {
+            const res = await fetch("/api/records/unreviewed");
+            const records = await res.json();
+            updateReviewBadgeCount(records.length);
+        } catch(e) {}
+        
+        // Notification permission request and testing
+        const btnReqNotification = document.getElementById("btn-request-notification");
+        if (btnReqNotification) {
+            btnReqNotification.addEventListener("click", async () => {
+                await window.requestNotificationPermission();
+                window.sendTestNotification();
+            });
+        }
+        if (window.updateNotificationPermissionStatus) {
+            window.updateNotificationPermissionStatus();
+        }
+    }
+    
+    // ==========================================
+    // HISTORY GALLERY & SECONDARY REVIEW LOGIC
+    // ==========================================
+    
+    let activeDetailRecord = null;
+    
+    // Bind Filter Event Listeners
+    const filterDateInput = document.getElementById("filter-date");
+    const filterReviewedSelect = document.getElementById("filter-reviewed");
+    const btnResetFilters = document.getElementById("btn-reset-filters");
+    
+    if (filterDateInput) {
+        filterDateInput.addEventListener("change", () => loadHistoryData(1));
+    }
+    if (filterReviewedSelect) {
+        filterReviewedSelect.addEventListener("change", () => loadHistoryData(1));
+    }
+    if (btnResetFilters) {
+        btnResetFilters.addEventListener("click", () => {
+            filterDateInput.value = "";
+            filterReviewedSelect.value = "";
+            loadHistoryData(1);
+        });
+    }
+    
+    // Bind Pagination Buttons
+    const btnHistoryPrev = document.getElementById("btn-history-prev");
+    const btnHistoryNext = document.getElementById("btn-history-next");
+    
+    if (btnHistoryPrev) {
+        btnHistoryPrev.addEventListener("click", () => {
+            if (historyCurrentPage > 1) {
+                loadHistoryData(historyCurrentPage - 1);
+            }
+        });
+    }
+    if (btnHistoryNext) {
+        btnHistoryNext.addEventListener("click", () => {
+            if (historyCurrentPage < historyTotalPages) {
+                loadHistoryData(historyCurrentPage + 1);
+            }
+        });
+    }
+    
+    async function loadHistoryData(page = 1) {
+        if (!config) await fetchConfig();
+        
+        historyCurrentPage = page;
+        
+        const dateVal = filterDateInput ? filterDateInput.value : "";
+        const reviewedVal = filterReviewedSelect ? filterReviewedSelect.value : "";
+        
+        let url = `/api/records?limit=${historyLimit}&offset=${(page - 1) * historyLimit}`;
+        if (dateVal) {
+            url += `&date=${dateVal}`;
+        }
+        if (reviewedVal !== "") {
+            url += `&reviewed=${reviewedVal}`;
+        }
+        
+        try {
+            const res = await fetch(url);
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(errData.detail || `HTTP ${res.status}`);
+            }
+            const data = await res.json();
+            
+            const total = data.total || 0;
+            const records = data.records || [];
+            
+            historyTotalPages = Math.max(1, Math.ceil(total / historyLimit));
+            
+            // Update total label
+            document.getElementById("history-total-count").innerText = total;
+            document.getElementById("history-current-page").innerText = historyCurrentPage;
+            document.getElementById("history-total-pages").innerText = historyTotalPages;
+            
+            // Update pagination buttons
+            if (btnHistoryPrev) btnHistoryPrev.disabled = historyCurrentPage <= 1;
+            if (btnHistoryNext) btnHistoryNext.disabled = historyCurrentPage >= historyTotalPages;
+            
+            renderHistoryGrid(records);
+        } catch (e) {
+            console.error("Error fetching history records:", e);
+            showToast("获取历史样本失败", "error");
+        }
+    }
+    
+    function renderHistoryGrid(records) {
+        const grid = document.getElementById("history-gallery-grid");
+        const emptyEl = document.getElementById("history-gallery-empty");
+        
+        grid.innerHTML = "";
+        
+        if (records.length === 0) {
+            grid.style.display = "none";
+            emptyEl.style.display = "flex";
+            return;
+        }
+        
+        grid.style.display = "grid";
+        emptyEl.style.display = "none";
+        
+        records.forEach((record, index) => {
+            const card = document.createElement("div");
+            card.className = "photo-card";
+            
+            const isReviewed = record.reviewed === 1;
+            const label = isReviewed ? record.corrected_label : record.predicted_label;
+            const badgeClass = isReviewed ? "reviewed" : "unreviewed";
+            const badgeText = isReviewed ? "已核对" : "未核对";
+            const confPct = record.confidence ? `${Math.round(record.confidence * 100)}%` : "N/A";
+            
+            card.innerHTML = `
+                <div class="photo-card-img-wrapper">
+                    <img src="/${record.image_path}?t=${new Date().getTime()}" alt="Record capture" loading="lazy">
+                    <span class="photo-card-badge ${badgeClass}">${badgeText}</span>
+                </div>
+                <div class="photo-card-meta">
+                    <h4 class="photo-card-title">${label}</h4>
+                    <span class="photo-card-time"><i class="ph ph-clock"></i>${record.timestamp}</span>
+                    <div class="photo-card-footer">
+                        <span class="photo-card-model">${record.model_type.toUpperCase()}</span>
+                        <span class="photo-card-conf">${confPct}</span>
+                    </div>
+                </div>
+            `;
+            
+            card.addEventListener("click", () => openDetailModal(record));
+            grid.appendChild(card);
+        });
+    }
+    
+    // Modal Event Bindings
+    const historyModal = document.getElementById("history-modal");
+    const btnCloseHistoryModal = document.getElementById("btn-close-history-modal");
+    const btnModalDelete = document.getElementById("btn-modal-delete");
+    
+    if (btnCloseHistoryModal) {
+        btnCloseHistoryModal.addEventListener("click", closeDetailModal);
+    }
+    if (historyModal) {
+        historyModal.addEventListener("click", (e) => {
+            if (e.target === historyModal) {
+                closeDetailModal();
+            }
+        });
+    }
+    if (btnModalDelete) {
+        btnModalDelete.addEventListener("click", async () => {
+            if (!activeDetailRecord) return;
+            if (confirm("确定要永久删除此图片和记录吗？此操作不可撤销。")) {
+                try {
+                    const res = await fetch(`/api/records/${activeDetailRecord.id}`, { method: "DELETE" });
+                    const result = await res.json();
+                    
+                    if (result.status === "success") {
+                        showToast("记录已删除", "success");
+                        closeDetailModal();
+                        loadHistoryData(historyCurrentPage);
+                        // Also update review badges in case we deleted an unreviewed record
+                        try {
+                            const resReview = await fetch("/api/records/unreviewed");
+                            const unreviewed = await resReview.json();
+                            updateReviewBadgeCount(unreviewed.length);
+                        } catch(err) {}
+                    } else {
+                        showToast("删除失败", "error");
+                    }
+                } catch (e) {
+                    showToast("接口请求失败", "error");
+                }
+            }
+        });
+    }
+    
+    function openDetailModal(record) {
+        activeDetailRecord = record;
+        
+        document.getElementById("modal-detail-id").innerText = record.id;
+        document.getElementById("modal-detail-time").innerText = record.timestamp;
+        document.getElementById("modal-detail-model").innerText = record.model_type.toUpperCase();
+        document.getElementById("modal-detail-predicted").innerText = record.predicted_label;
+        document.getElementById("modal-detail-confidence").innerText = record.confidence ? `${Math.round(record.confidence * 100)}%` : "N/A";
+        
+        const statusBadge = document.getElementById("modal-detail-status");
+        if (record.reviewed === 1) {
+            statusBadge.className = "status-badge active";
+            statusBadge.innerText = "已核对 (更正为: " + record.corrected_label + ")";
+        } else {
+            statusBadge.className = "status-badge";
+            statusBadge.innerText = "未核对";
+        }
+        
+        const detailImg = document.getElementById("modal-detail-image");
+        detailImg.src = `/${record.image_path}?t=${new Date().getTime()}`;
+        
+        renderModalCategoryButtons();
+        
+        historyModal.style.display = "flex";
+        // Trigger class for opacity transition
+        setTimeout(() => historyModal.classList.add("show"), 10);
+    }
+    
+    function closeDetailModal() {
+        if (!historyModal) return;
+        historyModal.classList.remove("show");
+        setTimeout(() => {
+            historyModal.style.display = "none";
+            activeDetailRecord = null;
+        }, 300);
+    }
+    
+    function renderModalCategoryButtons() {
+        const container = document.getElementById("modal-categories-grid");
+        container.innerHTML = "";
+        
+        if (!config || !config.categories || !activeDetailRecord) return;
+        
+        // Highlight active corrected label if it exists, otherwise predicted label
+        const activeLabel = activeDetailRecord.reviewed === 1 ? activeDetailRecord.corrected_label : activeDetailRecord.predicted_label;
+        
+        config.categories.forEach((cat, idx) => {
+            const btn = document.createElement("button");
+            btn.className = "btn-category-select";
+            
+            if (cat === activeLabel) {
+                btn.style.borderColor = "var(--primary)";
+                btn.style.backgroundColor = "var(--primary-light)";
+                btn.style.color = "var(--text-primary)";
+            }
+            
+            btn.innerHTML = `<span>${cat}</span>`;
+            btn.addEventListener("click", () => correctRecordLabel(cat));
+            container.appendChild(btn);
+        });
+    }
+    
+    async function correctRecordLabel(label) {
+        if (!activeDetailRecord) return;
+        
+        try {
+            const res = await fetch(`/api/records/${activeDetailRecord.id}/review`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ corrected_label: label })
+            });
+            const data = await res.json();
+            
+            if (data.status === "success") {
+                showToast(`标注已成功更新为 [${label}]`, "success");
+                
+                // Update local modal data view
+                activeDetailRecord.reviewed = 1;
+                activeDetailRecord.corrected_label = label;
+                
+                // Refresh modal view elements
+                const statusBadge = document.getElementById("modal-detail-status");
+                statusBadge.className = "status-badge active";
+                statusBadge.innerText = "已核对 (更正为: " + label + ")";
+                
+                renderModalCategoryButtons();
+                
+                // Reload current history list to reflect changes on cards
+                loadHistoryData(historyCurrentPage);
+                
+                // Also update review badges count
+                try {
+                    const resReview = await fetch("/api/records/unreviewed");
+                    const unreviewed = await resReview.json();
+                    updateReviewBadgeCount(unreviewed.length);
+                } catch(err) {}
+            } else {
+                showToast("更新标注失败", "error");
+            }
+        } catch (e) {
+            showToast("请求失败", "error");
+        }
+    }
+
+    init();
+});

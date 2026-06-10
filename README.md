@@ -79,7 +79,7 @@ uv venv
 ### 2. 安装全部依赖包
 
 ```bash
-uv pip install fastapi uvicorn opencv-python pillow torch torchvision transformers httpx open-clip-torch timm
+uv pip -r requirement.txt
 ```
 
 ---

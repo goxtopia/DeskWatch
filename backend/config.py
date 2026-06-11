@@ -29,7 +29,9 @@ DEFAULT_CONFIG = {
     "telegram_report_enabled": False,
     "telegram_report_time": "21:00",
     "drinking_categories": ["Drinking Water"],
-    "drinking_merge_gap": 5
+    "drinking_merge_gap": 5,
+    "swa_strategy": "softmax_drop_worst",
+    "swa_temperature": 10.0
 }
 
 def load_config():

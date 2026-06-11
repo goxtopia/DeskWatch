@@ -39,6 +39,10 @@ async function loadSettingsData() {
     // Drinking parameters loading
     document.getElementById("setting-drinking-merge-gap").value = config.drinking_merge_gap !== undefined ? config.drinking_merge_gap : 5;
     
+    // SWA config
+    document.getElementById("setting-swa-strategy").value = config.swa_strategy || "softmax_drop_worst";
+    document.getElementById("setting-swa-temperature").value = config.swa_temperature !== undefined ? config.swa_temperature : 10.0;
+    
     toggleSettingsSubsections();
     renderSettingsCategories();
 }
@@ -207,6 +211,10 @@ function initSettingsHandlers() {
             // Drinking config parameters saving
             const drinking_merge_gap = parseInt(document.getElementById("setting-drinking-merge-gap").value);
             
+            const swa_strategy = document.getElementById("setting-swa-strategy").value;
+            let swa_temperature = parseFloat(document.getElementById("setting-swa-temperature").value);
+            if (isNaN(swa_temperature)) swa_temperature = 10.0;
+            
             const break_categories = [];
             document.querySelectorAll("#setting-break-categories-list input:checked").forEach(cb => {
                 break_categories.push(cb.value);
@@ -251,7 +259,9 @@ function initSettingsHandlers() {
                 telegram_report_enabled,
                 telegram_report_time,
                 drinking_categories,
-                drinking_merge_gap
+                drinking_merge_gap,
+                swa_strategy,
+                swa_temperature
             };
             
             if (isNaN(drinking_merge_gap) || drinking_merge_gap < 0) {
@@ -277,7 +287,15 @@ function initSettingsHandlers() {
                     // Refresh status
                     fetchCameraStatus();
                 } else {
-                    showToast(data.detail || "保存失败", "error");
+                    let errMsg = "保存失败";
+                    if (data.detail) {
+                        if (Array.isArray(data.detail)) {
+                            errMsg = data.detail.map(e => `${e.loc.join('.')}: ${e.msg}`).join('\n');
+                        } else {
+                            errMsg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+                        }
+                    }
+                    showToast(errMsg, "error");
                 }
             } catch (e) {
                 showToast("接口请求错误", "error");

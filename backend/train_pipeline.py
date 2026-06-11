@@ -397,12 +397,42 @@ def _train_run(epochs, batch_size, lr, train_type="cnn"):
                 best_weights.append(best_fold_weights)
                 fold_accuracies.append(best_fold_acc)
                 
-            # Perform Weighted Stochastic Weight Averaging (SWA) based on fold accuracies
-            total_acc = sum(fold_accuracies)
-            if total_acc > 0:
-                blend_weights = [acc / total_acc for acc in fold_accuracies]
+            # Determine SWA strategy
+            swa_strategy = "softmax_drop_worst"
+            swa_temperature = 10.0 # scale factor to make better models dominate
+            if os.path.exists("config.json"):
+                try:
+                    with open("config.json", "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                        swa_strategy = cfg.get("swa_strategy", "softmax_drop_worst")
+                        swa_temperature = cfg.get("swa_temperature", 10.0)
+                except Exception as e:
+                    print(f"Error loading config.json for SWA strategy: {e}")
+
+            if swa_strategy == "softmax_drop_worst" and K > 1:
+                # Find the index of the worst model
+                worst_idx = min(range(K), key=lambda i: fold_accuracies[i])
+                
+                # Exclude the worst model
+                remaining_indices = [i for i in range(K) if i != worst_idx]
+                remaining_accs = torch.tensor([fold_accuracies[i] for i in remaining_indices], dtype=torch.float32)
+                
+                # Apply softmax, scaled by temperature so better models actually dominate
+                remaining_weights = torch.softmax(remaining_accs * swa_temperature, dim=0).tolist()
+                
+                blend_weights = [0.0] * K
+                for idx, w in zip(remaining_indices, remaining_weights):
+                    blend_weights[idx] = w
+                    
+                print(f"Using '{swa_strategy}' SWA strategy (T={swa_temperature}). Dropped fold {worst_idx+1}.")
             else:
-                blend_weights = [1.0 / K] * K
+                # Perform Weighted Stochastic Weight Averaging (SWA) based on fold accuracies
+                total_acc = sum(fold_accuracies)
+                if total_acc > 0:
+                    blend_weights = [acc / total_acc for acc in fold_accuracies]
+                else:
+                    blend_weights = [1.0 / K] * K
+                print("Using 'weighted_average' SWA strategy.")
                 
             print(f"Blending fold models. Weights: {[f'{w:.4f}' for w in blend_weights]}")
             

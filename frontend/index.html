@@ -679,6 +679,27 @@
 
                             <hr class="divider">
 
+                            <!-- MODEL TRAINING CONFIG SECTION -->
+                            <div class="settings-sub-section">
+                                <h4>模型微调高级配置 (SWA Model Soup)</h4>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label for="setting-swa-strategy">多折模型融合策略</label>
+                                        <select id="setting-swa-strategy">
+                                            <option value="softmax_drop_worst">剔除最差并进行 Softmax 加权 (默认)</option>
+                                            <option value="weighted_average">线性加权平均 (Weighted Average)</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="setting-swa-temperature">Softmax 缩放因子 (Temperature)</label>
+                                        <input type="number" id="setting-swa-temperature" min="1" max="100" step="1" placeholder="10.0">
+                                        <span class="help-block" style="font-size: 11px; margin-top: 4px; color: var(--text-muted);">数值越大，表现越好的模型权重占比越高（仅在 Softmax 模式下生效）</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <hr class="divider">
+
                             <div class="settings-footer">
                                 <button id="btn-save-settings" class="btn btn-primary btn-glow">
                                     <i class="ph ph-floppy-disk"></i> 保存并应用配置

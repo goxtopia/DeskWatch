@@ -53,7 +53,8 @@ class ConfigSchema(BaseModel):
     telegram_report_time: str
     drinking_categories: List[str]
     drinking_merge_gap: int
-
+    swa_strategy: str
+    swa_temperature: float
 
 class ReviewSchema(BaseModel):
     corrected_label: str

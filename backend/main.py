@@ -199,7 +199,71 @@ def delete_record_endpoint(record_id: int):
 @app.get("/api/stats/daily")
 def get_daily_stats_endpoint(date: Optional[str] = None):
     # Returns summary (counts) and chronological timeline
-    return get_daily_stats(date_str=date)
+    stats_data = get_daily_stats(date_str=date)
+    
+    # Calculate extra stats
+    timeline = stats_data.get("timeline", [])
+    config = load_config()
+    
+    # 1. Total tracked image count
+    total_images = len(timeline)
+    
+    # 2. Total tracked time string (approximate based on interval)
+    interval = config.get("sample_interval", 10)
+    total_seconds = total_images * interval
+    minutes = total_seconds // 60
+    hours = minutes // 60
+    rem_min = minutes % 60
+    if hours > 0:
+        total_time_str = f"{hours}h {rem_min}m"
+    else:
+        total_time_str = f"{rem_min}m"
+        
+    # 3. Sedentary stats (overtime & valid breaks)
+    from backend.health_monitor import calculate_sedentary_stats_for_today, calculate_drinking_count
+    sed_stats = calculate_sedentary_stats_for_today(timeline, config)
+    overtime_minutes = sed_stats.get("overtime_minutes", 0)
+    valid_breaks = sed_stats.get("valid_breaks", 0)
+    
+    # 4. Drinking stats
+    drinking_count = calculate_drinking_count(timeline, config)
+    
+    # 5. Total reviewed count
+    dataset_stats = get_dataset_stats()
+    reviewed_count = sum(dataset_stats.values())
+    
+    # 6. Computer & Phone times
+    summary = stats_data.get("summary", {})
+    computer_count = summary.get("Using Computer", 0)
+    phone_count = summary.get("Looking at Phone", 0)
+    
+    def format_duration(image_count, sample_interval):
+        tot_sec = image_count * sample_interval
+        tot_min = tot_sec // 60
+        tot_hr = tot_min // 60
+        rem_m = tot_min % 60
+        if tot_hr > 0:
+            return f"{tot_hr}h {rem_m}m"
+        else:
+            return f"{rem_m}m"
+            
+    computer_time_str = format_duration(computer_count, interval)
+    phone_time_str = format_duration(phone_count, interval)
+    
+    # Attach to the daily stats payload
+    stats_data.update({
+        "total_images": total_images,
+        "total_time_str": total_time_str,
+        "overtime_minutes": overtime_minutes,
+        "valid_breaks": valid_breaks,
+        "drinking_count": drinking_count,
+        "reviewed_count": reviewed_count,
+        "computer_time_str": computer_time_str,
+        "phone_time_str": phone_time_str
+    })
+    
+    return stats_data
+
 
 @app.get("/api/stats/dataset")
 def get_dataset_stats_endpoint():

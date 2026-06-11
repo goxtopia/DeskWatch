@@ -321,3 +321,45 @@ def calculate_sedentary_stats_for_today(records, config):
         "valid_breaks": total_valid_breaks,
         "overtime_minutes": round(total_overtime_seconds / 60.0)
     }
+
+
+def calculate_drinking_count(records, config):
+    if not records:
+        return 0
+        
+    drink_cats = config.get("drinking_categories", ["Drinking Water"])
+    drink_cats_lower = {c.lower() for c in drink_cats}
+    merge_gap = config.get("drinking_merge_gap", 5)
+    sample_interval = config.get("sample_interval", 10)
+    
+    def is_drink(label):
+        if not label:
+            return False
+        return label.lower() in drink_cats_lower
+        
+    def time_to_seconds(time_str):
+        try:
+            parts = time_str.split(" ")
+            if len(parts) < 2:
+                return 0
+            time_parts = parts[1].split(":")
+            return int(time_parts[0]) * 3600 + int(time_parts[1]) * 60 + int(time_parts[2])
+        except Exception:
+            return 0
+            
+    drink_records = [r for r in records if is_drink(r.get("label"))]
+    if not drink_records:
+        return 0
+        
+    occurrences = 1
+    max_allowed_diff = (merge_gap + 1) * sample_interval
+    
+    for i in range(1, len(drink_records)):
+        prev_time = time_to_seconds(drink_records[i-1]["timestamp"])
+        curr_time = time_to_seconds(drink_records[i]["timestamp"])
+        
+        if curr_time - prev_time > max_allowed_diff:
+            occurrences += 1
+            
+    return occurrences
+

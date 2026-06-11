@@ -19,172 +19,45 @@ async function loadDashboardData() {
         const data = await res.json();
         
         // Total tracked image count
-        const timeline = data.timeline || [];
-        const imageCount = timeline.length;
+        const imageCount = data.total_images !== undefined ? data.total_images : (data.timeline ? data.timeline.length : 0);
         document.getElementById("stat-total-images").innerText = imageCount;
         
         // Total tracked time (approximate based on interval)
-        const interval = config ? config.sample_interval : 10;
-        const totalSeconds = imageCount * interval;
-        const minutes = Math.floor(totalSeconds / 60);
-        const hours = Math.floor(minutes / 60);
-        const remMin = minutes % 60;
+        document.getElementById("stat-total-time").innerText = data.total_time_str || "0m";
         
-        let timeStr = "";
-        if (hours > 0) {
-            timeStr = `${hours}h ${remMin}m`;
-        } else {
-            timeStr = `${remMin}m`;
+        // Computer and phone time stats
+        const computerTimeEl = document.getElementById("stat-computer-time");
+        if (computerTimeEl) {
+            computerTimeEl.innerText = data.computer_time_str || "0m";
         }
-        document.getElementById("stat-total-time").innerText = timeStr;
+        const phoneTimeEl = document.getElementById("stat-phone-time");
+        if (phoneTimeEl) {
+            phoneTimeEl.innerText = data.phone_time_str || "0m";
+        }
         
         // Calculate and display sedentary stats (overtime & valid breaks)
-        const sedStats = calculateSedentaryStats(timeline);
-        document.getElementById("stat-overtime-time").innerText = `${sedStats.overtimeMinutes}m`;
-        document.getElementById("stat-valid-breaks").innerText = `${sedStats.validBreaks}次`;
+        document.getElementById("stat-overtime-time").innerText = `${data.overtime_minutes || 0}m`;
+        document.getElementById("stat-valid-breaks").innerText = `${data.valid_breaks || 0}次`;
         
         // Calculate and display drinking stats
-        const drinkCount = calculateDrinkingCount(timeline);
         const drinkCountEl = document.getElementById("stat-drinking-count");
         if (drinkCountEl) {
-            drinkCountEl.innerText = `${drinkCount}次`;
+            drinkCountEl.innerText = `${data.drinking_count || 0}次`;
         }
+        
+        // Total reviewed count
+        document.getElementById("stat-reviewed-count").innerText = data.reviewed_count || 0;
         
         // Build Doughnut Chart
         renderChart(data.summary);
         
         // Build Time Line Bar
-        renderTimelineBar(timeline);
+        renderTimelineBar(data.timeline || []);
         
     } catch (e) {
         console.error("Error loading dashboard stats:", e);
         showToast("拉取监测统计失败", "error");
     }
-    
-    // Get reviewed count
-    try {
-        const res = await fetch("/api/stats/dataset");
-        const data = await res.json();
-        const reviewedCount = Object.values(data).reduce((a, b) => a + b, 0);
-        document.getElementById("stat-reviewed-count").innerText = reviewedCount;
-    } catch (e) {
-        console.error("Error loading dataset stats:", e);
-    }
-}
-
-function calculateSedentaryStats(timeline) {
-    if (!timeline || timeline.length === 0) {
-        return { validBreaks: 0, overtimeMinutes: 0 };
-    }
-    
-    const interval = config ? config.sample_interval : 10;
-    const minBreakCount = config ? config.min_break_detections : 5;
-    const thresholdMinutes = config ? config.sedentary_threshold_minutes : 3;
-    const breakCats = config ? (config.break_categories || ["Away", "Standing", "Napping"]) : ["Away", "Standing", "Napping"];
-    const breakCatsLower = breakCats.map(c => c.toLowerCase());
-    
-    const isBreak = (label) => {
-        if (!label) return false;
-        return breakCatsLower.includes(label.toLowerCase());
-    };
-    
-    // Convert YYYY-MM-DD HH:MM:SS to seconds from midnight
-    function timeToSeconds(timeStr) {
-        try {
-            const parts = timeStr.split(" ");
-            if (parts.length < 2) return 0;
-            const timeParts = parts[1].split(":");
-            return parseInt(timeParts[0], 10) * 3600 + parseInt(timeParts[1], 10) * 60 + parseInt(timeParts[2], 10);
-        } catch (e) {
-            return 0;
-        }
-    }
-    
-    // 1. Group timeline into sessions based on sample gaps (> 5 * interval)
-    const maxGap = Math.max(300, 5 * interval);
-    const sessions = [];
-    let currentSession = [timeline[0]];
-    
-    for (let i = 1; i < timeline.length; i++) {
-        const prevSec = timeToSeconds(timeline[i-1].timestamp);
-        const currSec = timeToSeconds(timeline[i].timestamp);
-        if (currSec - prevSec > maxGap) {
-            sessions.push(currentSession);
-            currentSession = [];
-        }
-        currentSession.push(timeline[i]);
-    }
-    sessions.push(currentSession);
-    
-    let totalValidBreaks = 0;
-    let totalOvertimeSeconds = 0;
-    
-    // 2. Process each session
-    sessions.forEach(session => {
-        if (session.length === 0) return;
-        
-        // Find break segments in this session
-        const breakSegments = [];
-        let inBreak = false;
-        let startIdx = -1;
-        
-        for (let i = 0; i < session.length; i++) {
-            const isBrk = isBreak(session[i].label);
-            if (isBrk) {
-                if (!inBreak) {
-                    inBreak = true;
-                    startIdx = i;
-                }
-            } else {
-                if (inBreak) {
-                    breakSegments.push({ start: startIdx, end: i - 1 });
-                    inBreak = false;
-                }
-            }
-        }
-        if (inBreak) {
-            breakSegments.push({ start: startIdx, end: session.length - 1 });
-        }
-        
-        // Filter valid break segments (consecutive detections >= minBreakCount)
-        const validBreakSegments = [];
-        breakSegments.forEach(seg => {
-            const length = seg.end - seg.start + 1;
-            if (length >= minBreakCount) {
-                validBreakSegments.push(seg);
-                totalValidBreaks++;
-            }
-        });
-        
-        // 3. Calculate sitting segments (separated by valid breaks)
-        const sittingSegments = [];
-        let prevEnd = -1;
-        
-        validBreakSegments.forEach(vBreak => {
-            sittingSegments.push({ start: prevEnd + 1, end: vBreak.start - 1 });
-            prevEnd = vBreak.end;
-        });
-        sittingSegments.push({ start: prevEnd + 1, end: session.length - 1 });
-        
-        // For each sitting segment, calculate duration and see if it exceeds threshold
-        sittingSegments.forEach(seg => {
-            if (seg.start > seg.end) return;
-            
-            const startSec = timeToSeconds(session[seg.start].timestamp);
-            const endSec = timeToSeconds(session[seg.end].timestamp) + interval;
-            const durationSec = endSec - startSec;
-            
-            const thresholdSec = thresholdMinutes * 60;
-            if (durationSec > thresholdSec) {
-                totalOvertimeSeconds += (durationSec - thresholdSec);
-            }
-        });
-    });
-    
-    return {
-        validBreaks: totalValidBreaks,
-        overtimeMinutes: Math.round(totalOvertimeSeconds / 60)
-    };
 }
 
 function renderChart(summaryData) {
@@ -352,68 +225,4 @@ function renderTimelineBar(timeline) {
     });
 }
 
-function calculateDrinkingCount(timeline) {
-    if (!timeline || timeline.length === 0) return 0;
-    
-    const drinkCats = config && config.drinking_categories ? config.drinking_categories : ["Drinking Water"];
-    const drinkCatsLower = drinkCats.map(c => c.toLowerCase());
-    const mergeGap = config && config.drinking_merge_gap !== undefined ? config.drinking_merge_gap : 5;
-    const interval = config ? config.sample_interval : 10;
-    const maxGap = Math.max(300, 5 * interval);
-    
-    const isDrink = (label) => {
-        if (!label) return false;
-        return drinkCatsLower.includes(label.toLowerCase());
-    };
-    
-    // Find all drink indices
-    const drinkIndices = [];
-    for (let i = 0; i < timeline.length; i++) {
-        if (isDrink(timeline[i].label)) {
-            drinkIndices.push(i);
-        }
-    }
-    
-    if (drinkIndices.length === 0) return 0;
-    
-    function timeToSeconds(timeStr) {
-        try {
-            const parts = timeStr.split(" ");
-            if (parts.length < 2) return 0;
-            const timeParts = parts[1].split(":");
-            return parseInt(timeParts[0], 10) * 3600 + parseInt(timeParts[1], 10) * 60 + parseInt(timeParts[2], 10);
-        } catch (e) {
-            return 0;
-        }
-    }
-    
-    let occurrences = 1;
-    for (let i = 1; i < drinkIndices.length; i++) {
-        const prevIdx = drinkIndices[i-1];
-        const currIdx = drinkIndices[i];
-        
-        // 1. Check index gap
-        const indexGap = currIdx - prevIdx - 1;
-        if (indexGap > mergeGap) {
-            occurrences++;
-            continue;
-        }
-        
-        // 2. Check time gaps between consecutive records in the gap
-        let sessionSplit = false;
-        for (let j = prevIdx; j < currIdx; j++) {
-            const prevSec = timeToSeconds(timeline[j].timestamp);
-            const currSec = timeToSeconds(timeline[j+1].timestamp);
-            if (currSec - prevSec > maxGap) {
-                sessionSplit = true;
-                break;
-            }
-        }
-        
-        if (sessionSplit) {
-            occurrences++;
-        }
-    }
-    
-    return occurrences;
-}
+
